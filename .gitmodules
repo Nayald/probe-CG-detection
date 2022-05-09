@@ -1,0 +1,6 @@
+[submodule "readerwriterqueue"]
+	path = readerwriterqueue
+	url = https://github.com/cameron314/readerwriterqueue.git
+[submodule "abseil-cpp"]
+	path = abseil-cpp
+	url = https://github.com/abseil/abseil-cpp.git
