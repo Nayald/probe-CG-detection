@@ -135,6 +135,7 @@ void PacketParser::info() {
 }
 #endif
 
+
 void PacketParser::parse(const size_t i) {
     logger::log(logger::INFO, "packet parser starts a parse thread with pid ", gettid());
 #ifdef DEBUG
@@ -217,7 +218,8 @@ void PacketParser::parse(const size_t i) {
         //const uint16_t dst_port = *(uint16_t*)(msg.packet + offset + 2);
         //const uint16_t src_port = (msg.packet[offset] << 8) | msg.packet[offset + 1];
         //const uint16_t dst_port = (msg.packet[offset + 2] << 8) | msg.packet[offset + 3];
-        const uint16_t udp_length = (msg.packet[offset + 4] << 8) | msg.packet[offset + 5];
+        const uint16_t udp_length = bswap_16(*(uint16_t*)(msg.packet + offset + 4));
+        //const uint16_t udp_length = (msg.packet[offset + 4] << 8) | msg.packet[offset + 5];
 
 #ifdef DEBUG
         parser_threads[i].sum_pkt_parsing += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
@@ -236,7 +238,7 @@ void PacketParser::parse(const size_t i) {
                 timeradd(&msg.time, &WINDOWTIME, &t);
                 auto &&ret = streams.emplace(std::piecewise_construct,
                                              std::forward_as_tuple(ips.hash),
-                                             std::forward_as_tuple(ips.addrs[0], ips.addrs[1], 0, 0, t));
+                                             std::forward_as_tuple(ips.addrs[0], ips.addrs[1], t));
 
                 if (ret.second) {
                     it = ret.first;
@@ -265,7 +267,7 @@ void PacketParser::parse(const size_t i) {
                     // tv.sec not needed since window time < 1 second and logically iat too
                     s.up_iats.push_back(/*1'000'000 * t.tv_sec +*/ t.tv_usec);
                 }
-                s.up_sizes.push_back(udp_length - 8);
+                s.up_sizes.push_back(udp_length);
                 s.up_last_time = msg.time;
             } else {
                 if (!s.down_sizes.empty()) {
@@ -273,7 +275,7 @@ void PacketParser::parse(const size_t i) {
                     // tv.sec not needed since window time < 1 second and logically iat too
                     s.down_iats.push_back(/*1'000'000 * t.tv_sec +*/ t.tv_usec);
                 }
-                s.down_sizes.push_back(udp_length - 8);
+                s.down_sizes.push_back(udp_length);
                 s.down_last_time = msg.time;
             }
 
@@ -300,10 +302,10 @@ void PacketParser::parse(const size_t i) {
 
         timeradd(&msg.time, &WINDOWTIME, &s.end_time);
         if (s.src_addr == ips.addrs[0]) {
-            s.up_sizes.push_back(udp_length - 8);
+            s.up_sizes.push_back(udp_length);
             s.up_last_time = msg.time;
         } else {
-            s.down_sizes.push_back(udp_length - 8);
+            s.down_sizes.push_back(udp_length);
             s.down_last_time = msg.time;
         }
 
@@ -321,6 +323,8 @@ void PacketParser::parse(const size_t i) {
                                           [mean = up_size_mean](uint32_t acc, uint16_t e) {
                                               return acc + (e - mean) * (e - mean);
                                           }) / up_sizes.size();
+            // preference for payload length
+            up_size_mean -= uint16_t{8};
         }
 
         uint16_t down_size_mean = 0;
@@ -331,6 +335,8 @@ void PacketParser::parse(const size_t i) {
                                             [mean = down_size_mean](uint32_t acc, uint16_t e) {
                                                 return acc + (e - mean) * (e - mean);
                                             }) / down_sizes.size();
+            // preference for payload length
+            down_size_mean -= uint16_t{8};
         }
 
         uint16_t up_iat_mean = 0;
@@ -355,9 +361,10 @@ void PacketParser::parse(const size_t i) {
 
         sink.handle({
             s.src_addr, s.dst_addr, s.src_port, s.dst_port,
-            up_size_mean, up_iat_mean, up_size_var, up_iat_var,
-            down_size_mean, down_iat_mean, down_size_var, down_iat_var
+            (uint32_t)up_sizes.size(), up_size_mean, up_iat_mean, up_size_var, up_iat_var,
+            (uint32_t)down_sizes.size(), down_size_mean, down_iat_mean, down_size_var, down_iat_var
         });
+
 #ifdef DEBUG
         ++parser_threads[i].sum_win;
         parser_threads[i].sum_win_delay += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();

@@ -15,6 +15,7 @@ private:
     std::thread thread;
 
     sockaddr_in remote;
+    int sockfd;
 
 public:
     explicit WindowParser(const std::string addr, uint16_t port, int queue_capacity=512);

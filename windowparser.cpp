@@ -19,6 +19,17 @@ WindowParser::~WindowParser() {
 }
 
 void WindowParser::start() {
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    while (sockfd < 0){
+        logger::log(logger::ERROR, "unable to open UDP socket, wait 1s before retry");
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    }
+
+    if (connect(sockfd, (const sockaddr*)(&remote), sizeof(remote)) < 0) {
+        logger::log(logger::ERROR, "function connect return error");
+    }
+
     stop_condition = false;
     thread = std::thread(&WindowParser::run, this);
 }
@@ -41,21 +52,11 @@ void WindowParser::handle(window_msg &&msg) {
 void WindowParser::run() {
     logger::log(logger::INFO, "window parser starts a parser thread with pid ", gettid());
 
-    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    while (sockfd < 0){
-        logger::log(logger::ERROR, "unable to open UDP socket, wait 1s before retry");
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-        sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    }
-
-    if (connect(sockfd, (const sockaddr*)(&remote), sizeof(remote)) < 0) {
-        logger::log(logger::ERROR, "function connect return error");
-    }
-
     char buffer[1024];
     char src_addr[INET_ADDRSTRLEN];
     char dst_addr[INET_ADDRSTRLEN];
     window_msg msg;
+    uint32_t count = 0;
     while (!stop_condition) {
         if (!window_queue.wait_dequeue_timed(msg, 100000)) {
             continue;
@@ -64,9 +65,12 @@ void WindowParser::run() {
         inet_ntop(AF_INET, &msg.src_addr, src_addr, INET_ADDRSTRLEN);
         inet_ntop(AF_INET, &msg.dst_addr, dst_addr, INET_ADDRSTRLEN);
 
-        send(sockfd, buffer, sprintf(buffer, R"(["%s",%hu,"%s",%hu,[%hu,%u,%hu,%u],[%hu,%u,%hu,%u]])",
+        send(sockfd, buffer, sprintf(buffer, R"(["%s",%hu,"%s",%hu,[%u,%hu,%u,%hu,%u],[%u,%hu,%u,%hu,%u]])",
              src_addr, bswap_16(msg.src_port), dst_addr, bswap_16(msg.dst_port),
-             msg.up_size_mean, msg.up_size_var, msg.up_iat_mean, msg.up_iat_var,
-             msg.down_size_mean, msg.down_size_var, msg.down_iat_mean, msg.down_iat_var), 0);
+             msg.up_pkt_cpt, msg.up_size_mean, msg.up_size_var, msg.up_iat_mean, msg.up_iat_var,
+             msg.down_pkt_cpt, msg.down_size_mean, msg.down_size_var, msg.down_iat_mean, msg.down_iat_var), 0);
+        ++count;
     }
+    logger::log(logger::INFO, "window parser stops a parse thread with pid ", gettid());
+    logger::log(logger::INFO, "window parser send ", count, " report(s) to remote");
 }

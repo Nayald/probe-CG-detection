@@ -80,7 +80,7 @@ private:
         uint16_t dst_port = 0;
         std::vector<uint16_t> up_sizes;
         std::vector<uint16_t> down_sizes;
-        // uint16_t because window is 33000 us may not fit for higher size
+        // uint16_t because window is 33000 us, may not fit for higher values
         std::vector<uint16_t> up_iats;
         std::vector<uint16_t> down_iats;
         timeval up_last_time = {0};
@@ -89,6 +89,7 @@ private:
         timeval end_time = {0};
 
         stream() = default;
+        explicit stream(uint32_t src_addr, uint32_t dst_addr, timeval end_time) : src_addr(src_addr), dst_addr(dst_addr), end_time(end_time) {};
         explicit stream(uint32_t src_addr, uint32_t dst_addr, uint16_t src_port, uint16_t dst_port, timeval end_time) : src_addr(src_addr), dst_addr(dst_addr), src_port(src_port), dst_port(dst_port), end_time(end_time) {};
     };
 

@@ -32,13 +32,13 @@ void signal_handler(int signum){
 
 int main(int argc, char *argv[]) {
     if (argc <= 3) {
-        printf("usage: ./sniff bind_interface remote_address remote_port");
+        printf("usage: %s bind_interface remote_address remote_port\n", argv[0]);
         return 1;
     }
 
-    char *face = argv[1];
-    char *addr = argv[2];
-    uint16_t port = std::stoul(argv[3]);
+    const char *const face = argv[1];
+    const char *const addr = argv[2];
+    const uint16_t port = std::stoul(argv[3]);
 
     signal(SIGINT, signal_handler);
 
@@ -50,7 +50,7 @@ int main(int argc, char *argv[]) {
 
     handle = pcap_open_live(face, SNAPSIZE, 0, timeout_limit, errbuf);
     if (!handle) {
-        printf("can't sniff on device %s -> %s", face, errbuf);
+        printf("can't sniff on device %s -> %s\n", face, errbuf);
         return 1;
     }
 
@@ -75,6 +75,6 @@ int main(int argc, char *argv[]) {
     pcap_close(handle);
     packet_parser.stop();
     window_parser.stop();
-    printf("pcap capture stats: recv = %u pkts, drop = %u pkts, ifdrop = %u\n", stat.ps_recv, stat.ps_drop, stat.ps_ifdrop);
+    printf("pcap capture stats: recv = %u pkts, drop = %u pkts, ifdrop = %u pkts\n", stat.ps_recv, stat.ps_drop, stat.ps_ifdrop);
     return 0;
 }
