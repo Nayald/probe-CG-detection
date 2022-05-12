@@ -45,20 +45,22 @@ void PacketParser::stop() {
 }
 
 void PacketParser::handle(const packet_msg &msg) {
-    packet_queue.try_enqueue(msg);
 #ifdef DEBUGPLUS
     if (!packet_queue.try_enqueue(msg)) {
         logger::log(logger::WARNING, "drop packet, queue is full");
     }
+#else
+    packet_queue.try_enqueue(msg);
 #endif
 }
 
 void PacketParser::handle(packet_msg &&msg) {
-    packet_queue.try_enqueue(std::forward<packet_msg>(msg));
 #ifdef DEBUGPLUS
     if (!packet_queue.try_enqueue(std::forward<packet_msg>(msg))) {
         logger::log(logger::WARNING, "drop packet, queue is full");
     }
+#else
+    packet_queue.try_enqueue(std::forward<packet_msg>(msg));
 #endif
 }
 
@@ -88,6 +90,7 @@ void PacketParser::info() {
         uint64_t sum_pkt_parsing = 0;
         uint64_t sum_pkt_mapping = 0;
         uint64_t sum_win = 0;
+        uint64_t sum_win_time_gap = 0;
         uint64_t sum_win_delay = 0;
         for (thread_context &tc : parser_threads) {
             sum_queue_size += tc.sum_queue_size - tc.last_sum_queue_size;
@@ -104,6 +107,8 @@ void PacketParser::info() {
             tc.last_sum_pkt_mapping = tc.sum_pkt_mapping;
             sum_win += tc.sum_win - tc.last_sum_win;
             tc.last_sum_win = tc.sum_win;
+            sum_win_time_gap += tc.sum_win_time_gap - tc.last_sum_win_time_gap;
+            tc.last_sum_win_time_gap = tc.sum_win_time_gap;
             sum_win_delay += tc.sum_win_delay - tc.last_sum_win_delay;
             tc.last_sum_win_delay = tc.sum_win_delay;
         }
@@ -121,6 +126,7 @@ void PacketParser::info() {
         }
 
         if (sum_win > 0) {
+            ss << std::fixed << std::setprecision(2) << "\taverage window time gap = " << sum_win_time_gap / (double)sum_win << " us" << std::endl;
             ss << std::fixed << std::setprecision(2) << "\taverage window compute time = " << sum_win_delay / (double)sum_win << " ns (~" << sum_win_delay / 10'000'000 << "%)"  << std::endl;
             ss << std::fixed << std::setprecision(0) << "\testimated window compute capacity = " << sum_win / (double)MANAGERSLEEPTIME.count() << " / " << 1'000'000'000 * (sum_win / (double)(sum_pkt_parsing + sum_pkt_mapping + sum_win_delay)) << std::endl;
         }
@@ -262,20 +268,20 @@ void PacketParser::parse(const size_t i) {
             // continue to append
             // select direction
             if (s.src_addr == ips.addrs[0]) {
+                s.up_sizes.push_back(udp_length);
                 if (!s.up_sizes.empty()) {
                     timersub(&msg.time, &s.up_last_time, &t);
                     // tv.sec not needed since window time < 1 second and logically iat too
                     s.up_iats.push_back(/*1'000'000 * t.tv_sec +*/ t.tv_usec);
                 }
-                s.up_sizes.push_back(udp_length);
                 s.up_last_time = msg.time;
             } else {
+                s.down_sizes.push_back(udp_length);
                 if (!s.down_sizes.empty()) {
                     timersub(&msg.time, &s.down_last_time, &t);
                     // tv.sec not needed since window time < 1 second and logically iat too
                     s.down_iats.push_back(/*1'000'000 * t.tv_sec +*/ t.tv_usec);
                 }
-                s.down_sizes.push_back(udp_length);
                 s.down_last_time = msg.time;
             }
 
@@ -285,6 +291,12 @@ void PacketParser::parse(const size_t i) {
 
             continue;
         }
+
+#ifdef DEBUG
+        ++parser_threads[i].sum_win;
+        timersub(&msg.time, &s.end_time, &t);
+        parser_threads[i].sum_win_time_gap += t.tv_usec;
+#endif
 
         // extract
         std::vector<uint16_t> up_sizes;
@@ -366,7 +378,6 @@ void PacketParser::parse(const size_t i) {
         });
 
 #ifdef DEBUG
-        ++parser_threads[i].sum_win;
         parser_threads[i].sum_win_delay += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
 #endif
     }

@@ -40,6 +40,8 @@ private:
         uint64_t last_sum_pkt_mapping = 0;
         uint64_t sum_win = 0;
         uint64_t last_sum_win = 0;
+        uint64_t sum_win_time_gap = 0;
+        uint64_t last_sum_win_time_gap = 0;
         uint64_t sum_win_delay = 0;
         uint64_t last_sum_win_delay = 0;
 #endif
