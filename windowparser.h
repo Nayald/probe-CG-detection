@@ -11,8 +11,19 @@ class WindowParser : public WindowSink{
 private:
     moodycamel::BlockingReaderWriterCircularBuffer<window_msg> window_queue;
 
-    bool stop_condition = true;
-    std::thread thread;
+#ifdef DEBUG
+    uint64_t sum_queue_size = 0;
+    uint64_t last_sum_queue_size = 0;
+    uint64_t sum_win = 0;
+    uint64_t last_sum_win = 0;
+    uint64_t sum_win_parsing = 0;
+    uint64_t last_sum_win_parsing = 0;
+    bool info_stop_condition = true;
+    std::thread info_thread;
+#endif
+
+    bool parser_stop_condition = true;
+    std::thread parser_thread;
 
     sockaddr_in remote;
     int sockfd;
@@ -28,6 +39,9 @@ public:
     void handle(window_msg &&msg) override;
 
 private:
+#ifdef DEBUG
+    void info();
+#endif
     void run();
 };
 

@@ -12,9 +12,6 @@
 
 constexpr size_t SNAPSIZE = 82;
 constexpr timeval WINDOWTIME = {.tv_sec = 0, .tv_usec = 33000};
-constexpr timeval PURGETIME = {.tv_sec = 2, .tv_usec = 0};
-constexpr std::chrono::seconds MANAGERSLEEPTIME{2};
-constexpr std::chrono::seconds HOUSEKEEPERSLEEPTIME{15};
 
 struct packet_msg {
     timeval time;
@@ -36,14 +33,10 @@ private:
         uint64_t last_sum_pkt_delay = 0;
         uint64_t sum_pkt_parsing = 0;
         uint64_t last_sum_pkt_parsing = 0;
-        uint64_t sum_pkt_mapping = 0;
-        uint64_t last_sum_pkt_mapping = 0;
         uint64_t sum_win = 0;
         uint64_t last_sum_win = 0;
         uint64_t sum_win_time_gap = 0;
         uint64_t last_sum_win_time_gap = 0;
-        uint64_t sum_win_delay = 0;
-        uint64_t last_sum_win_delay = 0;
 #endif
         std::thread thread;
         bool stop_condition = false;
@@ -80,19 +73,18 @@ private:
         uint32_t dst_addr = 0;
         uint16_t src_port = 0;
         uint16_t dst_port = 0;
-        std::vector<uint16_t> up_sizes;
-        std::vector<uint16_t> down_sizes;
-        // uint16_t because window is 33000 us, may not fit for higher values
-        std::vector<uint16_t> up_iats;
-        std::vector<uint16_t> down_iats;
+        std::vector<int32_t, alignocator<int32_t, 32>> up_sizes;
+        std::vector<int32_t, alignocator<int32_t, 32>> down_sizes;
+        std::vector<int32_t, alignocator<int32_t, 32>> up_iats;
+        std::vector<int32_t, alignocator<int32_t, 32>> down_iats;
         timeval up_last_time = {0};
         timeval down_last_time = {0};
         // end time instead of start time to reduce usage of timeradd
         timeval end_time = {0};
 
         stream() = default;
-        explicit stream(uint32_t src_addr, uint32_t dst_addr, timeval end_time) : src_addr(src_addr), dst_addr(dst_addr), end_time(end_time) {};
-        explicit stream(uint32_t src_addr, uint32_t dst_addr, uint16_t src_port, uint16_t dst_port, timeval end_time) : src_addr(src_addr), dst_addr(dst_addr), src_port(src_port), dst_port(dst_port), end_time(end_time) {};
+        explicit stream(uint32_t src_addr, uint32_t dst_addr, timeval iat_origin, timeval end_time) : src_addr(src_addr), dst_addr(dst_addr), up_last_time(iat_origin), down_last_time(iat_origin), end_time(end_time) {};
+        explicit stream(uint32_t src_addr, uint32_t dst_addr, uint16_t src_port, uint16_t dst_port, timeval end_time, timeval iat_origin) : src_addr(src_addr), dst_addr(dst_addr), src_port(src_port), dst_port(dst_port), up_last_time(iat_origin), down_last_time(iat_origin), end_time(end_time) {};
     };
 
     moodycamel::BlockingReaderWriterCircularBuffer<packet_msg> packet_queue;
