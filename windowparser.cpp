@@ -11,6 +11,7 @@
 #ifdef CUSTOM_AVX
 #include <immintrin.h>
 #include <tuple>
+#include <cmath>
 #include "iacaMarks.h"
 
 // https://stackoverflow.com/questions/6996764/fastest-way-to-do-horizontal-sse-vector-sum-or-other-reduction
@@ -149,6 +150,7 @@ std::tuple<float, float, float , float> avx2_compute(const std::vector<int32_t, 
     v_iat1 = _mm256_add_ps(v_iat1, _mm256_add_ps(v_iat2, v_iat3));
 #endif
 
+#if defined(INT_ALL_FEATURES) || defined(INT_MEAN_FEATURES)
     volatile int32_t &&tmp_size_var = 0;
     volatile int32_t &&tmp_iat_var = 0;
     for (; i < sizes.size(); ++i) {
@@ -158,15 +160,28 @@ std::tuple<float, float, float , float> avx2_compute(const std::vector<int32_t, 
         tmp_iat_var += iat_sd * iat_sd;
     }
 
-#ifdef INT_ALL_FEATURES
-    int32_t ret_size_var = (hsum256_epi32(v_size1) + tmp_size_var) / sizes.size();
-    int32_t ret_iat_var = (hsum256_epi32(v_iat1) + tmp_iat_var) / sizes.size();
+#if defined(INT_ALL_FEATURES)
+    const int32_t ret_size_var = (hsum256_epi32(v_size1) + tmp_size_var) / sizes.size();
+    const int32_t ret_iat_var = (hsum256_epi32(v_iat1) + tmp_iat_var) / sizes.size();
 #else
-    float ret_size_var = (hsum256_ps(v_size1) + static_cast<float>(tmp_size_var)) / sizes.size();
-    float ret_iat_var = (hsum256_ps(v_iat1) + static_cast<float>(tmp_iat_var)) / sizes.size();
+    const float ret_size_var = (hsum256_ps(v_size1) + static_cast<float>(tmp_size_var)) / sizes.size();
+    const float ret_iat_var = (hsum256_ps(v_iat1) + static_cast<float>(tmp_iat_var)) / sizes.size();
+#endif
+#else
+    volatile float &&tmp_size_var = 0;
+    volatile float &&tmp_iat_var = 0;
+    for (; i < sizes.size(); ++i) {
+        const float &&size_sd = static_cast<float>(sizes[i]) - ret_size_mean;
+        tmp_size_var = std::fmaf(size_sd, size_sd, tmp_size_var);
+        const float &&iat_sd = static_cast<float>(iats[i]) - ret_iat_mean;
+        tmp_iat_var = std::fmaf(iat_sd, iat_sd, ret_iat_mean);
+    }
+
+    const float ret_size_var = (hsum256_ps(v_size1) + tmp_size_var) / sizes.size();
+    const float ret_iat_var = (hsum256_ps(v_iat1) + tmp_iat_var) / sizes.size();
 #endif
 
-    return {ret_size_mean - 8, ret_iat_mean, ret_size_var, ret_iat_var};
+    return {ret_size_mean - 8 /*minus header size*/, ret_iat_mean, ret_size_var, ret_iat_var};
 }
 #endif
 
