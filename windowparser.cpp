@@ -12,7 +12,6 @@
 #include <immintrin.h>
 #include <tuple>
 #include <cmath>
-#include "iacaMarks.h"
 
 // https://stackoverflow.com/questions/6996764/fastest-way-to-do-horizontal-sse-vector-sum-or-other-reduction
 inline float hsum256_ps(const __m256 &x) {
@@ -298,7 +297,7 @@ void WindowParser::run() {
     static const char *const pattern = R"(["%s",%hu,"%s",%hu,[%zu,%d,%d,%d,%d],[%zu,%d,%d,%d,%d]])";
 #elif INT_MEAN_FEATURES
     logger::log(logger::INFO, "window parser will compute mean features as integers and variance as floats");
-    static const char *const pattern = R"(["%s",%hu,"%s",%hu,[%zu,%d,%g,%d,%g],[%zu,%d,%g,%d,%g]])";
+    static const char *const pattern = R"(["%s",%hu,"%s",%hu,[%zu,%d,%.8g,%d,%.8g],[%zu,%d,%.8g,%d,%.8g]])";
 #else
     logger::log(logger::INFO, "window parser will compute mean and variance features as floats");
     static const char *const pattern = R"(["%s",%hu,"%s",%hu,[%zu,%.8g,%.8g,%.8g,%.8g],[%zu,%.8g,%.8g,%.8g,%.8g]])";
@@ -414,11 +413,11 @@ void WindowParser::run() {
                                               return acc + diff * diff;
                                           });
 #ifdef INT_MEAN_FEATURES
-            up_size_var = static_cast<float>(size_var) / msg.up_sizes.size();
-            up_iat_var = static_cast<float>(iat_var) / msg.up_sizes.size();
+            down_size_var = static_cast<float>(size_var) / msg.down_sizes.size();
+            down_iat_var = static_cast<float>(iat_var) / msg.down_sizes.size();
 #else
-            up_size_var = size_var / msg.up_sizes.size();
-            up_iat_var = iat_var / msg.up_sizes.size();
+            down_size_var = size_var / msg.down_sizes.size();
+            down_iat_var = iat_var / msg.down_sizes.size();
 #endif
 #else
             down_size_mean = static_cast<float>(size_mean) / msg.down_sizes.size();
