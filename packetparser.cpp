@@ -29,7 +29,8 @@ void PacketParser::start() {
     manager_stop_condition = false;
     manager_thread = std::thread(&PacketParser::info, this);
 #endif
-    parser_threads.emplace_back(std::thread(&PacketParser::parse, this, parser_threads.size()));
+    parser_stop_condition = false;
+    parser_thread = std::thread(&PacketParser::parse, this);
 }
 
 void PacketParser::stop() {
@@ -39,17 +40,14 @@ void PacketParser::stop() {
         manager_thread.join();
     }
 #endif
-    for (thread_context &e : parser_threads) {
-        if (!e.stop_condition) {
-            e.stop_condition = true;
-            e.thread.join();
-        }
+    if (!parser_stop_condition) {
+        parser_stop_condition = true;
+        parser_thread.join();
     }
-    parser_threads.clear();
 }
 
 void PacketParser::handle(const packet_msg &msg) {
-#ifdef DEBUGPLUS
+#ifdef QUEUE_VERBOSE
     if (!packet_queue.try_enqueue(msg)) {
         logger::log(logger::WARNING, "drop packet, queue is full");
     }
@@ -59,7 +57,7 @@ void PacketParser::handle(const packet_msg &msg) {
 }
 
 void PacketParser::handle(packet_msg &&msg) {
-#ifdef DEBUGPLUS
+#ifdef QUEUE_VERBOSE
     if (!packet_queue.try_enqueue(std::forward<packet_msg>(msg))) {
         logger::log(logger::WARNING, "drop packet, queue is full");
     }
@@ -71,60 +69,38 @@ void PacketParser::handle(packet_msg &&msg) {
 #ifdef DEBUG
 void PacketParser::info() {
     logger::log(logger::INFO, "packet parser starts a manager thread with pid ", gettid());
-    /*size_t max_size = std::thread::hardware_concurrency() - 2;
-    if (max_size < 3) {
-        max_size = 3;
-    }*/
 
     std::stringstream ss;
     while (!manager_stop_condition) {
-        /*if (packet_queue.size_approx() > 1000 && parser_threads.size() < max_size) {
-            parser_threads.emplace_back(std::thread(&PacketParser::parse, this, parser_threads.size()));
-        } else if (packet_queue.size_approx() < 10 && parser_threads.size() > 3) {
-            thread_context &tc = parser_threads.back();
-            tc.stop_condition = true;
-            tc.thread.join();
-            parser_threads.pop_back();
-        }*/
-
-        uint64_t sum_queue_size = 0;
-        uint64_t sum_pkt = 0;
-        uint64_t sum_pkt_size = 0;
-        uint64_t sum_pkt_delay = 0;
-        uint64_t sum_pkt_parsing = 0;
-        uint64_t sum_win = 0;
-        uint64_t sum_win_time_gap = 0;
-        for (thread_context &tc : parser_threads) {
-            sum_queue_size += tc.sum_queue_size - tc.last_sum_queue_size;
-            tc.last_sum_queue_size = tc.sum_queue_size;
-            sum_pkt += tc.sum_pkt - tc.last_sum_pkt;
-            tc.last_sum_pkt = tc.sum_pkt;
-            sum_pkt_size += tc.sum_pkt_size - tc.last_sum_pkt_size;
-            tc.last_sum_pkt_size = tc.sum_pkt_size;
-            sum_pkt_delay += tc.sum_pkt_delay - tc.last_sum_pkt_delay;
-            tc.last_sum_pkt_delay = tc.sum_pkt_delay;
-            sum_pkt_parsing += tc.sum_pkt_parsing - tc.last_sum_pkt_parsing;
-            tc.last_sum_pkt_parsing = tc.sum_pkt_parsing;
-            sum_win += tc.sum_win - tc.last_sum_win;
-            tc.last_sum_win = tc.sum_win;
-            sum_win_time_gap += tc.sum_win_time_gap - tc.last_sum_win_time_gap;
-            tc.last_sum_win_time_gap = tc.sum_win_time_gap;
-        }
+        const uint64_t sum_queue_size_delta = sum_queue_size - last_sum_queue_size;
+        last_sum_queue_size = sum_queue_size;
+        const uint64_t sum_pkt_delta = sum_pkt - last_sum_pkt;
+        last_sum_pkt = sum_pkt;
+        const uint64_t sum_pkt_size_delta = sum_pkt_size - last_sum_pkt_size;
+        last_sum_pkt_size = sum_pkt_size;
+        const uint64_t sum_pkt_delay_delta = sum_pkt_delay - last_sum_pkt_delay;
+        last_sum_pkt_delay = sum_pkt_delay;
+        const uint64_t sum_pkt_parsing_delta = sum_pkt_parsing - last_sum_pkt_parsing;
+        last_sum_pkt_parsing = sum_pkt_parsing;
+        const uint64_t sum_win_delta = sum_win - last_sum_win;
+        last_sum_win = sum_win;
+        const uint64_t sum_win_time_gap_delta = sum_win_time_gap - last_sum_win_time_gap;
+        last_sum_win_time_gap = sum_win_time_gap;
 
         ss << "packet parser info" << std::endl
-           << "\taverage packet parser queue size = " << (sum_queue_size ? sum_queue_size / sum_pkt : 0) << " / " << packet_queue.max_capacity() << std::endl
+           << "\taverage packet parser queue size = " << (sum_queue_size_delta ? sum_queue_size_delta / sum_pkt_delta : 0) << " / " << packet_queue.max_capacity() << std::endl
            << "\tcurrent packet parser table size = " << streams.size() << std::endl;
 
-        ss << "\tcurrent parsing pace = " << sum_pkt / MANAGERSLEEPTIME.count() << " pkts/s (~" << (sum_pkt_size >> 7) / MANAGERSLEEPTIME.count() << " Kbps)" << std::endl;
-        if (sum_pkt > 0) {
-            ss << std::fixed << std::setprecision(2) << "\t\taverage packet waiting time = " << static_cast<double>(sum_pkt_delay) / sum_pkt << " us" << std::endl;
-            ss << std::fixed << std::setprecision(2) << "\t\taverage packet handle time = " << static_cast<double>(sum_pkt_parsing) / sum_pkt << " ns" << std::endl;
-            ss << std::fixed << std::setprecision(0) << "\t\testimated packet compute capacity = " << 1'000'000'000. / (static_cast<double>(sum_pkt_parsing) / sum_pkt) << " (~" << sum_pkt_parsing / 10'000'000 << "%)" << std::endl;
+        ss << "\tcurrent parsing pace = " << sum_pkt_delta / MANAGERSLEEPTIME.count() << " pkts/s (~" << (sum_pkt_size_delta >> 7) / MANAGERSLEEPTIME.count() << " Kbps)" << std::endl;
+        if (sum_pkt_delta > 0) {
+            ss << std::fixed << std::setprecision(2) << "\t\taverage packet waiting time = " << static_cast<double>(sum_pkt_delay_delta) / static_cast<double>(sum_pkt_delta) << " us" << std::endl;
+            ss << std::fixed << std::setprecision(2) << "\t\taverage packet handle time = " << static_cast<double>(sum_pkt_parsing_delta) / static_cast<double>(sum_pkt_delta) << " ns" << std::endl;
+            ss << std::fixed << std::setprecision(0) << "\t\testimated packet compute capacity = " << 1'000'000'000 / (static_cast<double>(sum_pkt_parsing_delta) / static_cast<double>(sum_pkt_delta)) << " (~" << sum_pkt_parsing_delta / 10'000'000 << "%)" << std::endl;
         }
 
-        if (sum_win > 0) {
-            ss << "\taverage window per second = " << sum_win / MANAGERSLEEPTIME.count() << std::endl;
-            ss << std::fixed << std::setprecision(2) << "\t\taverage window time gap = " << static_cast<double>(sum_win_time_gap) / sum_win << " us" << std::endl;
+        if (sum_win_delta > 0) {
+            ss << "\taverage window per second = " << sum_win_delta / MANAGERSLEEPTIME.count() << std::endl;
+            ss << std::fixed << std::setprecision(2) << "\t\taverage window time gap = " << static_cast<double>(sum_win_time_gap_delta) / static_cast<double>(sum_win_delta) << " us" << std::endl;
         }
 
         logger::log(logger::INFO, ss.str());
@@ -138,19 +114,19 @@ void PacketParser::info() {
 #endif
 
 
-void PacketParser::parse(const size_t i) {
+void PacketParser::parse() {
     logger::log(logger::INFO, "packet parser starts a parse thread with pid ", gettid());
+
 #ifdef DEBUG
-    std::chrono::steady_clock::time_point start;
     std::stringstream ss;
     char src_addr[INET_ADDRSTRLEN];
     char dst_addr[INET_ADDRSTRLEN];
 #endif
     timeval now, t;
-    std::chrono::steady_clock::time_point last_purge;
+    std::chrono::steady_clock::time_point start, last_purge;
     packet_msg pmsg;
     window_msg wmsg;
-    while (!parser_threads[i].stop_condition) {
+    while (!parser_stop_condition) {
         if (!packet_queue.wait_dequeue_timed(pmsg, 5000)) {
             if ((start = std::chrono::steady_clock::now()) - last_purge > HOUSEKEEPERSLEEPTIME) {
 #ifdef DEBUG
@@ -183,12 +159,12 @@ void PacketParser::parse(const size_t i) {
         }
 
 #ifdef DEBUG
-        parser_threads[i].sum_queue_size += packet_queue.size_approx();
-        ++parser_threads[i].sum_pkt;
-        parser_threads[i].sum_pkt_size += pmsg.size;
+        sum_queue_size += packet_queue.size_approx();
+        ++sum_pkt;
+        sum_pkt_size += pmsg.size;
         gettimeofday(&t, NULL);
         timersub(&t, &pmsg.time, &t);
-        parser_threads[i].sum_pkt_delay += 1'000'000 * t.tv_sec + t.tv_usec;
+        sum_pkt_delay += 1'000'000 * t.tv_sec + t.tv_usec;
         start = std::chrono::steady_clock::now();
 #endif
 
@@ -198,32 +174,23 @@ void PacketParser::parse(const size_t i) {
             continue;
         }*/
 
-        //size_t offset = 14;
-        //const uint8_t ihl = (msg.packet[offset] & 0xF) * 4;
+        size_t offset = 14;
+        const uint8_t ihl = (pmsg.packet[offset] & 0xF) * 4;
         //const uint8_t ip_prot = msg.packet[offset + 9];
         // keep packet endianness for IPs, not useful for parsing
         ip_pair ips;
         //ips.hash = *(uint64_t*)(msg.packet + 26);
-        std::memcpy(&ips, pmsg.packet + 26, 8 * sizeof(u_char));
-        /*
-        uint32_t src_addr;
-        std::memcpy(&src_addr, msg.packet + offset + 12, 4 * sizeof(u_char));
-        uint32_t dst_addr;
-        std::memcpy(&dst_addr, msg.packet + offset + 16, 4 * sizeof(u_char));
-        */
+        std::memcpy(&ips, pmsg.packet + offset + 12, 8 * sizeof(u_char));
         // check if contains UDP header, commented because trust in pcap filter
         /*if (ip_prot != 17) {
             continue;
         }*/
 
-        const size_t offset = 14 + (pmsg.packet[14] & 0xF) * 4;
+        offset = 14 + ihl;
         // keep packet endianness for ports, not useful for parsing
         //const uint16_t src_port = *(uint16_t*)(msg.packet + offset);
         //const uint16_t dst_port = *(uint16_t*)(msg.packet + offset + 2);
-        //const uint16_t src_port = (msg.packet[offset] << 8) | msg.packet[offset + 1];
-        //const uint16_t dst_port = (msg.packet[offset + 2] << 8) | msg.packet[offset + 3];
         const uint16_t udp_length = bswap_16(*(uint16_t*)(pmsg.packet + offset + 4));
-        //const uint16_t udp_length = (msg.packet[offset + 4] << 8) | msg.packet[offset + 5];
 
         //stream_key key_a = {.ip1 = src_addr, .ip2 = dst_addr, .p1 = src_port, .p2 = dst_port};
         // find or create entry
@@ -244,7 +211,7 @@ void PacketParser::parse(const size_t i) {
                 } else {
                     logger::log(logger::ERROR, "unable to insert new stream in table, drop packet");
 #ifdef DEBUG
-                    parser_threads[i].sum_pkt_parsing += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
+                    sum_pkt_parsing += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
 #endif
                     continue;
                 }
@@ -253,8 +220,6 @@ void PacketParser::parse(const size_t i) {
 
         stream &s = it->second;
 
-        // timeradd needed only if we store start time
-        //timeradd(&s.end_time, &WINDOWTIME, &t);
         // verify if window is still in the interval
         if (timercmp(&pmsg.time, &s.end_time, <)) {
             // continue to append
@@ -274,9 +239,9 @@ void PacketParser::parse(const size_t i) {
             }
         } else {
 #ifdef DEBUG
-            ++parser_threads[i].sum_win;
+            ++sum_win;
             timersub(&pmsg.time, &s.end_time, &t);
-            parser_threads[i].sum_win_time_gap += 1'000'000 * t.tv_sec + t.tv_usec;
+            sum_win_time_gap += 1'000'000 * t.tv_sec + t.tv_usec;
 #endif
 
             // extract
@@ -313,7 +278,7 @@ void PacketParser::parse(const size_t i) {
             }
         }
 #ifdef DEBUG
-        parser_threads[i].sum_pkt_parsing += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
+        sum_pkt_parsing += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
 #endif
     }
     logger::log(logger::INFO, "packet parser stops a parse thread with pid ", gettid());

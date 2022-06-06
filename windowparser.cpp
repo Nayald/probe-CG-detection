@@ -65,8 +65,8 @@ std::tuple<float, float, float , float> avx2_compute(const std::vector<int32_t, 
         s_iat1 = _mm256_add_epi32(s_iat1, _mm256_load_si256((__m256i*)&iats[i + 8 * 4]));
     }
 
-    volatile int32_t &&tmp_size_mean = hsum256_epi32(s_size1);
-    volatile int32_t &&tmp_iat_mean = hsum256_epi32(s_iat1);
+    int32_t &&tmp_size_mean = hsum256_epi32(s_size1);
+    int32_t &&tmp_iat_mean = hsum256_epi32(s_iat1);
     for (; i < sizes.size(); ++i) {
         tmp_size_mean += sizes[i];
         tmp_iat_mean += iats[i];
@@ -167,8 +167,8 @@ std::tuple<float, float, float , float> avx2_compute(const std::vector<int32_t, 
     const float ret_iat_var = (hsum256_ps(v_iat1) + static_cast<float>(tmp_iat_var)) / sizes.size();
 #endif
 #else
-    volatile float &&tmp_size_var = 0;
-    volatile float &&tmp_iat_var = 0;
+    float &&tmp_size_var = 0;
+    float &&tmp_iat_var = 0;
     for (; i < sizes.size(); ++i) {
         const float &&size_sd = static_cast<float>(sizes[i]) - ret_size_mean;
         tmp_size_var = std::fmaf(size_sd, size_sd, tmp_size_var);
@@ -186,7 +186,7 @@ std::tuple<float, float, float , float> avx2_compute(const std::vector<int32_t, 
 
 static constexpr std::chrono::seconds MANAGERSLEEPTIME{2};
 
-WindowParser::WindowParser(const std::string addr, uint16_t port, int queue_capacity) : window_queue(queue_capacity) {
+WindowParser::WindowParser(const std::string &addr, uint16_t port, int queue_capacity) : window_queue(queue_capacity) {
     remote.sin_family = AF_INET;
     remote.sin_port = htons(port);
     if (inet_pton(AF_INET, addr.c_str(), &(remote.sin_addr)) <= 0) {
@@ -258,7 +258,7 @@ void WindowParser::info() {
     logger::log(logger::INFO, "window parser starts an info thread with pid ", gettid());
 
     std::stringstream ss;
-    while (!parser_stop_condition) {
+    while (!info_stop_condition) {
         const uint64_t &&sum_queue_size_delta = sum_queue_size - last_sum_queue_size;
         last_sum_queue_size = sum_queue_size;
         const uint64_t &&sum_win_delta = sum_win - last_sum_win;

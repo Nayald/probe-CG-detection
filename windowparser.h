@@ -29,7 +29,7 @@ private:
     int sockfd;
 
 public:
-    explicit WindowParser(const std::string addr, uint16_t port, int queue_capacity=512);
+    explicit WindowParser(const std::string &addr, uint16_t port, int queue_capacity=512);
     ~WindowParser() override;
 
     void start();

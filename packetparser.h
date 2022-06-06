@@ -21,30 +21,6 @@ struct packet_msg {
 
 class PacketParser {
 private:
-    struct thread_context {
-#ifdef DEBUG
-        uint64_t sum_queue_size = 0;
-        uint64_t last_sum_queue_size = 0;
-        uint64_t sum_pkt = 0;
-        uint64_t last_sum_pkt = 0;
-        uint64_t sum_pkt_size = 0;
-        uint64_t last_sum_pkt_size = 0;
-        uint64_t sum_pkt_delay = 0;
-        uint64_t last_sum_pkt_delay = 0;
-        uint64_t sum_pkt_parsing = 0;
-        uint64_t last_sum_pkt_parsing = 0;
-        uint64_t sum_win = 0;
-        uint64_t last_sum_win = 0;
-        uint64_t sum_win_time_gap = 0;
-        uint64_t last_sum_win_time_gap = 0;
-#endif
-        std::thread thread;
-        bool stop_condition = false;
-
-        thread_context() = default;
-        explicit thread_context(std::thread &&t) : thread(std::move(t)) {}
-    };
-
     // may simplify ip usage
     union ip_pair {
         uint64_t hash;
@@ -85,16 +61,33 @@ private:
         stream() = default;
         explicit stream(uint32_t src_addr, uint32_t dst_addr, timeval iat_origin, timeval end_time) : src_addr(src_addr), dst_addr(dst_addr), up_last_time(iat_origin), down_last_time(iat_origin), end_time(end_time) {};
         explicit stream(uint32_t src_addr, uint32_t dst_addr, uint16_t src_port, uint16_t dst_port, timeval end_time, timeval iat_origin) : src_addr(src_addr), dst_addr(dst_addr), src_port(src_port), dst_port(dst_port), up_last_time(iat_origin), down_last_time(iat_origin), end_time(end_time) {};
+        stream(stream &&s) = default;
     };
 
-    moodycamel::BlockingReaderWriterCircularBuffer<packet_msg> packet_queue;
-    absl::flat_hash_map<uint64_t, stream> streams;
-
 #ifdef DEBUG
+    uint64_t sum_queue_size = 0;
+    uint64_t last_sum_queue_size = 0;
+    uint64_t sum_pkt = 0;
+    uint64_t last_sum_pkt = 0;
+    uint64_t sum_pkt_size = 0;
+    uint64_t last_sum_pkt_size = 0;
+    uint64_t sum_pkt_delay = 0;
+    uint64_t last_sum_pkt_delay = 0;
+    uint64_t sum_pkt_parsing = 0;
+    uint64_t last_sum_pkt_parsing = 0;
+    uint64_t sum_win = 0;
+    uint64_t last_sum_win = 0;
+    uint64_t sum_win_time_gap = 0;
+    uint64_t last_sum_win_time_gap = 0;
     bool manager_stop_condition = true;
     std::thread manager_thread;
 #endif
-    std::vector<thread_context> parser_threads;
+
+    bool parser_stop_condition = true;
+    std::thread parser_thread;
+
+    moodycamel::BlockingReaderWriterCircularBuffer<packet_msg> packet_queue;
+    absl::flat_hash_map<uint64_t, stream> streams;
 
     WindowSink &sink;
 
@@ -112,7 +105,7 @@ private:
 #ifdef DEBUG
     void info();
 #endif
-    void parse(const size_t i);
+    void parse();
 };
 
 
