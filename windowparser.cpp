@@ -234,7 +234,7 @@ void WindowParser::stop() {
 }
 
 void WindowParser::handle(const window_msg &msg) {
-#ifdef DEBUGPLUS
+#ifdef QUEUE_VERBOSE
     if (!window_queue.try_enqueue(msg)) {
         logger::log(logger::WARNING, "drop window, queue is full");
     }
@@ -244,7 +244,7 @@ void WindowParser::handle(const window_msg &msg) {
 }
 
 void WindowParser::handle(window_msg &&msg) {
-#ifdef DEBUGPLUS
+#ifdef QUEUE_VERBOSE
     if (!window_queue.try_enqueue(std::forward<window_msg>(msg))) {
         logger::log(logger::WARNING, "drop window, queue is full");
     }

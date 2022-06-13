@@ -25,6 +25,8 @@ namespace logger {
 
     void setMinimalLogLevel(Level level);
 
+    void log(Level l, const char *msg);
+
     void log(Level l, const std::string &msg);
 
     template<typename ...Args>

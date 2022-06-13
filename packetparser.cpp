@@ -27,10 +27,12 @@ PacketParser::~PacketParser() {
 void PacketParser::start() {
 #ifdef DEBUG
     manager_stop_condition = false;
-    manager_thread = std::thread(&PacketParser::info, this);
+    manager_thread = std::thread(&PacketParser::runInfo, this);
 #endif
+#ifndef NO_PP_THREAD
     parser_stop_condition = false;
-    parser_thread = std::thread(&PacketParser::parse, this);
+    parser_thread = std::thread(&PacketParser::runParser, this);
+#endif
 }
 
 void PacketParser::stop() {
@@ -40,40 +42,94 @@ void PacketParser::stop() {
         manager_thread.join();
     }
 #endif
+#ifndef NO_PP_THREAD
     if (!parser_stop_condition) {
         parser_stop_condition = true;
         parser_thread.join();
     }
-}
-
-void PacketParser::handle(const packet_msg &msg) {
-#ifdef QUEUE_VERBOSE
-    if (!packet_queue.try_enqueue(msg)) {
-        logger::log(logger::WARNING, "drop packet, queue is full");
-    }
-#else
-    packet_queue.try_enqueue(msg);
 #endif
 }
 
-void PacketParser::handle(packet_msg &&msg) {
+void PacketParser::handle(const packet_msg &pmsg) {
+#ifndef NO_PP_THREAD
+#ifdef QUEUE_VERBOSE
+    if (!packet_queue.try_enqueue(pmsg)) {
+        logger::log(logger::WARNING, "drop packet, queue is full");
+    }
+#else
+    packet_queue.try_enqueue(pmsg);
+#endif
+#else
+    parse(pmsg);
+#endif
+}
+
+void PacketParser::handle(packet_msg &&pmsg) {
+#ifndef NO_PP_THREAD
 #ifdef QUEUE_VERBOSE
     if (!packet_queue.try_enqueue(std::forward<packet_msg>(msg))) {
         logger::log(logger::WARNING, "drop packet, queue is full");
     }
 #else
-    packet_queue.try_enqueue(std::forward<packet_msg>(msg));
+    packet_queue.try_enqueue(std::forward<packet_msg>(pmsg));
+#endif
+#else
+    parse(pmsg);
 #endif
 }
 
+void PacketParser::handle(const pcap_pkthdr *const header, const u_char *const packet) {
+    packet_msg pmsg;
+    pmsg.timestamp = header->ts;
+    pmsg.packet_size = header->len;
+
+    // check if contains IP header, commented because trust in pcap filter
+    /*const uint16_t eth_prot = (msg.packet[12] << 8) + msg.packet[13];
+    if (eth_prot != 0x0800) {
+        continue;
+    }*/
+
+    size_t offset = 14;
+    const uint8_t ihl = (packet[offset] & 0xF) * 4;
+    //const uint8_t ip_prot = msg.packet[offset + 9];
+    // keep packet endianness for IPs, not useful for parsing
+    //ips.hash = *(uint64_t*)(msg.packet + 26);
+    std::memcpy(&pmsg.ips, packet + offset + 12, 8 * sizeof(u_char));
+    // check if contains UDP header, commented because trust in pcap filter
+    /*if (ip_prot != 17) {
+        continue;
+    }*/
+
+    offset += ihl;
+    // keep packet endianness for ports, not useful for parsing
+    //const uint16_t src_port = *(uint16_t*)(msg.packet + offset);
+    //const uint16_t dst_port = *(uint16_t*)(msg.packet + offset + 2);
+    pmsg.udp_length = bswap_16(*(uint16_t*)(packet + offset + 4));
+
+#ifndef NO_PP_THREAD
+#ifdef QUEUE_VERBOSE
+    if (!packet_queue.try_enqueue(pmsg)) {
+        logger::log(logger::WARNING, "drop packet, queue is full");
+    }
+#else
+    packet_queue.try_enqueue(pmsg);
+#endif
+#else
+   parse(pmsg);
+#endif
+}
+
+
 #ifdef DEBUG
-void PacketParser::info() {
+void PacketParser::runInfo() {
     logger::log(logger::INFO, "packet parser starts a manager thread with pid ", gettid());
 
     std::stringstream ss;
     while (!manager_stop_condition) {
+#ifndef NO_PP_THREAD
         const uint64_t sum_queue_size_delta = sum_queue_size - last_sum_queue_size;
         last_sum_queue_size = sum_queue_size;
+#endif
         const uint64_t sum_pkt_delta = sum_pkt - last_sum_pkt;
         last_sum_pkt = sum_pkt;
         const uint64_t sum_pkt_size_delta = sum_pkt_size - last_sum_pkt_size;
@@ -88,7 +144,9 @@ void PacketParser::info() {
         last_sum_win_time_gap = sum_win_time_gap;
 
         ss << "packet parser info" << std::endl
+#ifndef NO_PP_THREAD
            << "\taverage packet parser queue size = " << (sum_queue_size_delta ? sum_queue_size_delta / sum_pkt_delta : 0) << " / " << packet_queue.max_capacity() << std::endl
+#endif
            << "\tcurrent packet parser table size = " << streams.size() << std::endl;
 
         ss << "\tcurrent parsing pace = " << sum_pkt_delta / MANAGERSLEEPTIME.count() << " pkts/s (~" << (sum_pkt_size_delta >> 7) / MANAGERSLEEPTIME.count() << " Kbps)" << std::endl;
@@ -113,173 +171,152 @@ void PacketParser::info() {
 }
 #endif
 
-
-void PacketParser::parse() {
+#ifndef NO_PP_THREAD
+void PacketParser::runParser() {
     logger::log(logger::INFO, "packet parser starts a parse thread with pid ", gettid());
 
-#ifdef DEBUG
-    std::stringstream ss;
-    char src_addr[INET_ADDRSTRLEN];
-    char dst_addr[INET_ADDRSTRLEN];
-#endif
-    timeval now, t;
-    std::chrono::steady_clock::time_point start, last_purge;
     packet_msg pmsg;
-    window_msg wmsg;
+    std::chrono::steady_clock::time_point last_purge;
     while (!parser_stop_condition) {
         if (!packet_queue.wait_dequeue_timed(pmsg, 5000)) {
-            if ((start = std::chrono::steady_clock::now()) - last_purge > HOUSEKEEPERSLEEPTIME) {
-#ifdef DEBUG
-                ss << "start purging old data" << std::endl;
-#endif
-                gettimeofday(&now, NULL);
-                for (auto it = streams.begin(); it != streams.end();) {
-                    timersub(&now, &it->second.end_time, &t);
-                    if (timercmp(&t, &PURGETIME, >=)) {
-#ifdef DEBUG
-                        inet_ntop(AF_INET, &it->second.src_addr, src_addr, INET_ADDRSTRLEN);
-                        inet_ntop(AF_INET, &it->second.dst_addr, dst_addr, INET_ADDRSTRLEN);
-                        ss << "\tremoves an old stream (" << src_addr << ":" << bswap_16(it->second.src_port)
-                           << " -> " << dst_addr << ":" << bswap_16(it->second.dst_port) << ")" << std::endl;
-#endif
-                        streams.erase(it++);
-                    } else {
-                        it++;
-                    }
-                }
-#ifdef DEBUG
-                logger::log(logger::INFO, ss.str());
-                ss.str({});
-                ss.clear();
-#endif
+            if (auto start = std::chrono::steady_clock::now(); start - last_purge > HOUSEKEEPERSLEEPTIME) {
+                purge();
                 last_purge = start;
-            }
-
-            continue;
-        }
-
-#ifdef DEBUG
-        sum_queue_size += packet_queue.size_approx();
-        ++sum_pkt;
-        sum_pkt_size += pmsg.size;
-        gettimeofday(&t, NULL);
-        timersub(&t, &pmsg.time, &t);
-        sum_pkt_delay += 1'000'000 * t.tv_sec + t.tv_usec;
-        start = std::chrono::steady_clock::now();
-#endif
-
-        // check if contains IP header, commented because trust in pcap filter
-        /*const uint16_t eth_prot = (msg.packet[12] << 8) + msg.packet[13];
-        if (eth_prot != 0x0800) {
-            continue;
-        }*/
-
-        size_t offset = 14;
-        const uint8_t ihl = (pmsg.packet[offset] & 0xF) * 4;
-        //const uint8_t ip_prot = msg.packet[offset + 9];
-        // keep packet endianness for IPs, not useful for parsing
-        ip_pair ips;
-        //ips.hash = *(uint64_t*)(msg.packet + 26);
-        std::memcpy(&ips, pmsg.packet + offset + 12, 8 * sizeof(u_char));
-        // check if contains UDP header, commented because trust in pcap filter
-        /*if (ip_prot != 17) {
-            continue;
-        }*/
-
-        offset = 14 + ihl;
-        // keep packet endianness for ports, not useful for parsing
-        //const uint16_t src_port = *(uint16_t*)(msg.packet + offset);
-        //const uint16_t dst_port = *(uint16_t*)(msg.packet + offset + 2);
-        const uint16_t udp_length = bswap_16(*(uint16_t*)(pmsg.packet + offset + 4));
-
-        //stream_key key_a = {.ip1 = src_addr, .ip2 = dst_addr, .p1 = src_port, .p2 = dst_port};
-        // find or create entry
-        auto &&it = streams.find(ips.hash);
-        if (it == streams.end()) {
-            // test the other direction
-            //stream_key key_b = {.ip1 = dst_addr, .ip2 = src_addr, .p1 = dst_port, .p2 = src_port};
-            it = streams.find((ips.hash << 32) | (ips.hash >> 32));
-            if (it == streams.end()) {
-                // end is first packet time + window time frame
-                timeradd(&pmsg.time, &WINDOWTIME, &t);
-                auto &&ret = streams.emplace(std::piecewise_construct,
-                                             std::forward_as_tuple(ips.hash),
-                                             std::forward_as_tuple(ips.addrs[0], ips.addrs[1], pmsg.time, t));
-
-                if (ret.second) {
-                    it = ret.first;
-                } else {
-                    logger::log(logger::ERROR, "unable to insert new stream in table, drop packet");
-#ifdef DEBUG
-                    sum_pkt_parsing += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
-#endif
-                    continue;
-                }
-            }
-        }
-
-        stream &s = it->second;
-
-        // verify if window is still in the interval
-        if (timercmp(&pmsg.time, &s.end_time, <)) {
-            // continue to append
-            // select direction
-            if (s.src_addr == ips.addrs[0]) {
-                s.up_sizes.push_back(udp_length);
-                // tv.sec not needed since window time < 1 second and logically iat too
-                timersub(&pmsg.time, &s.up_last_time, &t);
-                s.up_iats.push_back(/*1'000'000 * t.tv_sec +*/ t.tv_usec);
-                s.up_last_time = pmsg.time;
-            } else {
-                s.down_sizes.push_back(udp_length);
-                // tv.sec not needed since window time < 1 second and logically iat too
-                timersub(&pmsg.time, &s.down_last_time, &t);
-                s.down_iats.push_back(/*1'000'000 * t.tv_sec +*/ t.tv_usec);
-                s.down_last_time = pmsg.time;
             }
         } else {
 #ifdef DEBUG
-            ++sum_win;
-            timersub(&pmsg.time, &s.end_time, &t);
-            sum_win_time_gap += 1'000'000 * t.tv_sec + t.tv_usec;
+            sum_queue_size += packet_queue.size_approx();
+#endif
+            parse(pmsg);
+        }
+    }
+    logger::log(logger::INFO, "packet parser stops a parse thread with pid ", gettid());
+}
 #endif
 
-            // extract
-            wmsg.src_addr = s.src_addr;
-            wmsg.dst_addr = s.dst_addr;
-            wmsg.src_port = s.src_port;
-            wmsg.dst_port = s.dst_port;
-            wmsg.up_sizes.clear();
-            wmsg.up_sizes.reserve(s.up_sizes.capacity());
-            std::swap(wmsg.up_sizes, s.up_sizes);
-            wmsg.down_sizes.clear();
-            wmsg.down_sizes.reserve(s.down_sizes.capacity());
-            std::swap(wmsg.down_sizes, s.down_sizes);
-            wmsg.up_iats.clear();
-            wmsg.up_iats.reserve(s.up_iats.capacity());
-            std::swap(wmsg.up_iats, s.up_iats);
-            wmsg.down_iats.clear();
-            wmsg.down_iats.reserve(s.down_iats.capacity());
-            std::swap(wmsg.down_iats, s.down_iats);
+void PacketParser::parse(const packet_msg &pmsg) {
+    timeval t;
+#ifdef DEBUG
+    ++sum_pkt;
+    sum_pkt_size += pmsg.packet_size;
+    gettimeofday(&t, NULL);
+    timersub(&t, &pmsg.timestamp, &t);
+    sum_pkt_delay += 1'000'000 * t.tv_sec + t.tv_usec;
+    const auto start = std::chrono::steady_clock::now();
+#endif
 
-            sink.handle(std::move(wmsg));
+    //stream_key key_a = {.ip1 = src_addr, .ip2 = dst_addr, .p1 = src_port, .p2 = dst_port};
+    // find or create entry
+    auto it = streams.find(pmsg.ips.hash);
+    if (it == streams.end()) {
+        // test the other direction
+        //stream_key key_b = {.ip1 = dst_addr, .ip2 = src_addr, .p1 = dst_port, .p2 = src_port};
+        it = streams.find((pmsg.ips.hash << 32) | (pmsg.ips.hash >> 32));
+        if (it == streams.end()) {
+            // end is first packet time + window time frame
+            timeradd(&pmsg.timestamp, &WINDOWTIME, &t);
+            auto ret = streams.emplace(std::piecewise_construct,
+                                       std::forward_as_tuple(pmsg.ips.hash),
+                                       std::forward_as_tuple(pmsg.ips.addrs[0], pmsg.ips.addrs[1], pmsg.timestamp, t));
 
-            timeradd(&pmsg.time, &WINDOWTIME, &s.end_time);
-            if (s.src_addr == ips.addrs[0]) {
-                s.up_sizes.push_back(udp_length);
-                timersub(&pmsg.time, &s.up_last_time, &t);
-                s.up_iats.push_back(/*1'000'000 * t.tv_sec +*/ t.tv_usec);
-                s.up_last_time = pmsg.time;
+            if (ret.second) {
+                it = ret.first;
             } else {
-                s.down_sizes.push_back(udp_length);
-                timersub(&pmsg.time, &s.down_last_time, &t);
-                s.down_iats.push_back(/*1'000'000 * t.tv_sec +*/ t.tv_usec);
-                s.down_last_time = pmsg.time;
+                logger::log(logger::ERROR, "unable to insert new stream in table, drop packet");
+#ifdef DEBUG
+                sum_pkt_parsing += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
+#endif
+                return;
             }
         }
+    }
+
+    stream &s = it->second;
+
+    // verify if window is still in the interval
+    if (timercmp(&pmsg.timestamp, &s.end_time, <)) {
+        // continue to append
+        // select direction
+        if (s.src_addr == pmsg.ips.addrs[0]) {
+            s.up_sizes.push_back(pmsg.udp_length);
+            // tv.sec not needed since window time < 1 second and logically iat too
+            timersub(&pmsg.timestamp, &s.up_last_time, &t);
+            s.up_iats.push_back(/*1'000'000 * t.tv_sec +*/ t.tv_usec);
+            s.up_last_time = pmsg.timestamp;
+        } else {
+            s.down_sizes.push_back(pmsg.udp_length);
+            // tv.sec not needed since window time < 1 second and logically iat too
+            timersub(&pmsg.timestamp, &s.down_last_time, &t);
+            s.down_iats.push_back(/*1'000'000 * t.tv_sec +*/ t.tv_usec);
+            s.down_last_time = pmsg.timestamp;
+        }
+    } else {
+#ifdef DEBUG
+        ++sum_win;
+        timersub(&pmsg.timestamp, &s.end_time, &t);
+        sum_win_time_gap += 1'000'000 * t.tv_sec + t.tv_usec;
+#endif
+
+        // extract
+        window_msg wmsg;
+        wmsg.src_addr = s.src_addr;
+        wmsg.dst_addr = s.dst_addr;
+        wmsg.src_port = s.src_port;
+        wmsg.dst_port = s.dst_port;
+
+        wmsg.up_sizes.reserve(s.up_sizes.capacity());
+        std::swap(wmsg.up_sizes, s.up_sizes);
+        wmsg.down_sizes.reserve(s.down_sizes.capacity());
+        std::swap(wmsg.down_sizes, s.down_sizes);
+        wmsg.up_iats.reserve(s.up_iats.capacity());
+        std::swap(wmsg.up_iats, s.up_iats);
+        wmsg.down_iats.reserve(s.down_iats.capacity());
+        std::swap(wmsg.down_iats, s.down_iats);
+
+        sink.handle(std::move(wmsg));
+
+        timeradd(&pmsg.timestamp, &WINDOWTIME, &s.end_time);
+        if (s.src_addr == pmsg.ips.addrs[0]) {
+            s.up_sizes.push_back(pmsg.udp_length);
+            timersub(&pmsg.timestamp, &s.up_last_time, &t);
+            s.up_iats.push_back(/*1'000'000 * t.tv_sec +*/ t.tv_usec);
+            s.up_last_time = pmsg.timestamp;
+        } else {
+            s.down_sizes.push_back(pmsg.udp_length);
+            timersub(&pmsg.timestamp, &s.down_last_time, &t);
+            s.down_iats.push_back(/*1'000'000 * t.tv_sec +*/ t.tv_usec);
+            s.down_last_time = pmsg.timestamp;
+        }
+    }
 #ifdef DEBUG
         sum_pkt_parsing += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
 #endif
-    }
-    logger::log(logger::INFO, "packet parser stops a parse thread with pid ", gettid());
+}
+
+void PacketParser::purge() {
+    timeval now, t;
+#ifdef DEBUG
+    char src_addr[INET_ADDRSTRLEN];
+    char dst_addr[INET_ADDRSTRLEN];
+    std::stringstream ss;
+    ss << "start purging old data" << std::endl;
+#endif
+        gettimeofday(&now, NULL);
+        for (auto it = streams.begin(); it != streams.end();) {
+            timersub(&now, &it->second.end_time, &t);
+            if (timercmp(&t, &PURGETIME, >=)) {
+#ifdef DEBUG
+                inet_ntop(AF_INET, &it->second.src_addr, src_addr, INET_ADDRSTRLEN);
+                inet_ntop(AF_INET, &it->second.dst_addr, dst_addr, INET_ADDRSTRLEN);
+                ss << "\tremoves an old stream (" << src_addr << ":" << bswap_16(it->second.src_port)
+                   << " -> " << dst_addr << ":" << bswap_16(it->second.dst_port) << ")" << std::endl;
+#endif
+                streams.erase(it++);
+            } else {
+                it++;
+            }
+        }
+#ifdef DEBUG
+        logger::log(logger::INFO, ss.str());
+#endif
 }

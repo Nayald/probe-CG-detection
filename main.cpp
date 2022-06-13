@@ -9,17 +9,8 @@ extern "C" {
 #include "windowparser.h"
 #include "logger.h"
 
-void packet_handler(u_char *const args, const pcap_pkthdr *header, const u_char *packet) {
-    static packet_msg msg;
-    // verify we have at least the length of Eth + IP + UDP header, commented because trust in pcap filter
-    /*if (header->caplen < 42) {
-        return;
-    }*/
-
-    msg.time = header->ts;
-    msg.size = header->len;
-    std::memcpy(msg.packet, packet, header->caplen);
-    ((PacketParser*)args)->handle(msg);
+void packet_handler(u_char *const args, const pcap_pkthdr *const header, const u_char *const packet) {
+    ((PacketParser*)args)->handle(header, packet);
 }
 
 pcap_t *handle;
@@ -43,8 +34,8 @@ int main(int argc, char *argv[]) {
     signal(SIGINT, signal_handler);
 
     char errbuf[PCAP_ERRBUF_SIZE];
-    //const char *filter_exp = "ether proto \\ip and ip proto \\udp";
-    const char *filter_exp = "ip and udp";
+    // limit capture to UDP over IPv4, capture only first fragment if any
+    const char *const filter_exp = "ip and ip[6:2] & 0x1fff = 0 and udp";
     bpf_program filter;
     int timeout_limit = 1000; /* In milliseconds */
 
@@ -64,7 +55,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    WindowParser window_parser(addr, port, 1 << 8);
+    WindowParser window_parser(addr, port, 1 << 10);
     PacketParser packet_parser(window_parser, 1 << 16);
     window_parser.start();
     packet_parser.start();

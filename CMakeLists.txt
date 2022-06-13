@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 project(sniffer)
 
 set(CMAKE_CXX_STANDARD 17)
-add_compile_options(-Wall -Winline -std=c++17 -O2 -march=native -ftree-vectorize -fopt-info-vec-optimized)
+add_compile_options(-Wall -std=c++17 -O2 -march=native -ftree-vectorize)
 
 set(ABSL_PROPAGATE_CXX_STD ON)
 add_subdirectory(abseil-cpp)
@@ -11,9 +11,10 @@ include(FindPCAP.cmake)
 find_package(Threads REQUIRED)
 
 add_definitions(-DDEBUG)
-#add_definitions(-DCUSTOM_AVX)
+add_definitions(-DNO_PP_THREAD)
+add_definitions(-DCUSTOM_AVX)
 #add_definitions(-DINT_MEAN_FEATURES)
-add_definitions(-DINT_ALL_FEATURES)
+#add_definitions(-DINT_ALL_FEATURES)
 
 add_executable(sniffer
         main.cpp

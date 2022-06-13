@@ -5,6 +5,9 @@
 #include <unordered_map>
 #include <thread>
 #include <iostream>
+extern "C" {
+#include <pcap.h>
+}
 
 #include "abseil-cpp/absl/container/flat_hash_map.h"
 #include "readerwriterqueue/readerwritercircularbuffer.h"
@@ -13,20 +16,22 @@
 constexpr size_t SNAPSIZE = 82;
 constexpr timeval WINDOWTIME = {.tv_sec = 0, .tv_usec = 33000};
 
-struct packet_msg {
-    timeval time;
-    uint32_t size;
-    u_char packet[SNAPSIZE];
+// may simplify ip usage
+union ip_pair {
+    uint64_t hash;
+    uint32_t addrs[2];
+};
+
+// current size => 16 + 8 + 4 + 2 = 30
+struct alignas(32) packet_msg {
+    timeval timestamp;
+    ip_pair ips;
+    uint32_t packet_size;
+    uint16_t udp_length;
 };
 
 class PacketParser {
 private:
-    // may simplify ip usage
-    union ip_pair {
-        uint64_t hash;
-        uint32_t addrs[2];
-    };
-
     // for ip:port hash key, not needed for ip alone since it can fit in a uint64_t
     /*struct stream_key {
         uint32_t ip1;
@@ -65,8 +70,10 @@ private:
     };
 
 #ifdef DEBUG
+#ifndef NO_PP_THREAD
     uint64_t sum_queue_size = 0;
     uint64_t last_sum_queue_size = 0;
+#endif
     uint64_t sum_pkt = 0;
     uint64_t last_sum_pkt = 0;
     uint64_t sum_pkt_size = 0;
@@ -100,12 +107,18 @@ public:
 
     void handle(const packet_msg &msg);
     void handle(packet_msg &&msg);
+    void handle(const pcap_pkthdr *const header, const u_char *const packet);
 
 private:
 #ifdef DEBUG
-    void info();
+    void runInfo();
 #endif
-    void parse();
+#ifndef NO_PP_THREAD
+    void runParser();
+#endif
+
+    void parse(const packet_msg &pmsg);
+    void purge();
 };
 
 
