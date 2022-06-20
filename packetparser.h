@@ -26,7 +26,7 @@ union ip_pair {
 struct alignas(32) packet_msg {
     timeval timestamp;
     ip_pair ips;
-    uint32_t packet_size;
+    //uint32_t packet_size;
     uint16_t udp_length;
 };
 
@@ -90,8 +90,12 @@ private:
     std::thread manager_thread;
 #endif
 
+#ifndef NO_PP_THREAD
     bool parser_stop_condition = true;
     std::thread parser_thread;
+#else
+    timeval last_purge, purge_delta;
+#endif
 
     moodycamel::BlockingReaderWriterCircularBuffer<packet_msg> packet_queue;
     absl::flat_hash_map<uint64_t, stream> streams;

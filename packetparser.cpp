@@ -61,6 +61,11 @@ void PacketParser::handle(const packet_msg &pmsg) {
 #endif
 #else
     parse(pmsg);
+    timersub(&pmsg.timestamp, &last_purge, &purge_delta);
+    if (purge_delta.tv_sec >= HOUSEKEEPERSLEEPTIME.count()) {
+        purge();
+        last_purge = pmsg.timestamp;
+    }
 #endif
 }
 
@@ -75,13 +80,18 @@ void PacketParser::handle(packet_msg &&pmsg) {
 #endif
 #else
     parse(pmsg);
+    timersub(&pmsg.timestamp, &last_purge, &purge_delta);
+    if (purge_delta.tv_sec >= HOUSEKEEPERSLEEPTIME.count()) {
+        purge();
+        last_purge = pmsg.timestamp;
+    }
 #endif
 }
 
 void PacketParser::handle(const pcap_pkthdr *const header, const u_char *const packet) {
     packet_msg pmsg;
     pmsg.timestamp = header->ts;
-    pmsg.packet_size = header->len;
+    //pmsg.packet_size = header->len;
 
     // check if contains IP header, commented because trust in pcap filter
     /*const uint16_t eth_prot = (msg.packet[12] << 8) + msg.packet[13];
@@ -115,7 +125,12 @@ void PacketParser::handle(const pcap_pkthdr *const header, const u_char *const p
     packet_queue.try_enqueue(pmsg);
 #endif
 #else
-   parse(pmsg);
+    parse(pmsg);
+    timersub(&pmsg.timestamp, &last_purge, &purge_delta);
+    if (purge_delta.tv_sec >= HOUSEKEEPERSLEEPTIME.count()) {
+        purge();
+        last_purge = pmsg.timestamp;
+    }
 #endif
 }
 
@@ -198,7 +213,7 @@ void PacketParser::parse(const packet_msg &pmsg) {
     timeval t;
 #ifdef DEBUG
     ++sum_pkt;
-    sum_pkt_size += pmsg.packet_size;
+    sum_pkt_size += pmsg.udp_length;
     gettimeofday(&t, NULL);
     timersub(&t, &pmsg.timestamp, &t);
     sum_pkt_delay += 1'000'000 * t.tv_sec + t.tv_usec;
